@@ -2,9 +2,10 @@
 import requests
 import time
 import thread
-import threadpool
+#import threadpool
 import json
 import sys
+import base64
 import ConfigParser
 try:
     from selenium import webdriver
@@ -61,13 +62,13 @@ class PetChain():
         try:
             data = {
                 "appId":1,
-                "lastAmount":1,
+                "lastAmount":0,
                 "lastRareDegree":0,
                 "pageNo":1,
-                "pageSize":20,
+                "pageSize":10,
                 "petIds":[],
                 "querySortType":"AMOUNT_ASC",
-                "requestId":1517730660382,
+                "requestId":int(time.time() * 1000),
                 "tpl":"",
             }
             page = requests.post("https://pet-chain.baidu.com/data/market/queryPetsOnSale", headers=self.headers, data=json.dumps(data))
@@ -75,32 +76,65 @@ class PetChain():
                 print "[->] purchase"
                 pets = page.json().get(u"data").get("petsOnSale")
 
+                for pet in pets:
+                    if not self.purchase(pet):
+                        break
+
+                """
                 pool = threadpool.ThreadPool(10)
                 req = threadpool.makeRequests(self.purchase, pets)
                 for queue in req:
                     pool.putRequest(queue)
                 pool.wait()
+                """
         except Exception,e:
+            print(e)
             pass
+            
+    def get_captcha(self):
+        result = ("", 0)
+        data = {
+            "appId":1,
+            "requestId": int(time.time() * 1000),
+            "tpl":""
+        }
+        page = requests.post("https://pet-chain.baidu.com/data/captcha/gen", headers=self.headers, data=json.dumps(data), timeout=2)
+        if page.status_code == 200:
+            ret = page.json()
+            with open('captcha.jpg', 'wb') as fp:
+                fp.write(base64.b64decode(ret.get('data', {}).get('img')))
+                fp.close()
+            captcha = raw_input("enter captcha:")
+            return (captcha, ret.get('data', {}).get('seed'))
+        return result
 
     def purchase(self, pet):
         try:
             pet_id = pet.get(u"petId")
             pet_amount = pet.get(u"amount")
+            pet_validCode = pet.get(u"validCode")
             pet_degree = pet.get(u"rareDegree")
             data = {
                 "appId":1,
                 "petId":pet_id,
-                "requestId":1517730660382,
+                "captcha": "",
+                "seed": 0,
+                "requestId": int(time.time() * 1000),
                 "tpl":"",
-                "amount":"{}".format(pet_amount)
+                "amount":"{}".format(pet_amount),
+                "validCode": pet_validCode
             }
+
+            print pet_id, pet.get(u"desc"), pet_amount, "<=", self.degree_conf.get(pet_degree), float(pet_amount) <= self.degree_conf.get(pet_degree), "\n"
             
             if float(pet_amount) <= self.degree_conf.get(pet_degree):
+                data['captcha'], data['seed'] = self.get_captcha()
                 page = requests.post("https://pet-chain.baidu.com/data/txn/create", headers=self.headers, data=json.dumps(data), timeout=2)
                 print json.dumps(page.json(),ensure_ascii=False)
+                return True
         except Exception,e:
             pass
+        return False
 
     def login(self):
         assert self.username and self.password, ValueError("请在配置文件中配置用户名和密码")
@@ -126,24 +160,6 @@ class PetChain():
         web.quit()
         self.run()
 
-    def get_captcha(self):
-        seed = -1
-        img = ''
-        try:
-            data = {
-                "requestId":1517881529697,
-                "appId":1,
-                "tpl":""
-            }
-            page = requests.post("https://pet-chain.baidu.com/data/captcha/gen", data=json.dumps(data), headers=self.headers)
-            resp = page.json()
-            if resp.get(u"errorMsg") == u"success":
-                seed = resp.get(u"data").get(u"seed")
-                img = resp.get(u"data").get(u"img")
-        except Exception,e:
-            print e
-        return seed,img
-
     def format_cookie(self, cookies):
         self.cookies = ''
         for cookie in cookies:
@@ -168,9 +184,9 @@ class PetChain():
 
 if __name__ == "__main__":
     pc = PetChain()
-    if sys.argv[1] == "run":
+    if len(sys.argv) >= 2 and sys.argv[1] == "run":
         pc.run()
-    elif sys.argv[1] == "login":
+    elif len(sys.argv) >= 2 and sys.argv[1] == "login":
         pc.login()
     else:
         pc.run()
